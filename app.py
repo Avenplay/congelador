@@ -23,7 +23,8 @@ def iniciar_supabase() -> Client:
 
 @st.cache_resource
 def iniciar_gemini() -> genai.Client:
-    return genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+    api_key_limpia = str(st.secrets["GEMINI_API_KEY"]).strip()
+    return genai.Client(api_key=api_key_limpia)
 
 supabase = iniciar_supabase()
 gemini_client = iniciar_gemini()
