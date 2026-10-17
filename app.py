@@ -17,18 +17,18 @@ st.set_page_config(
 
 @st.cache_resource
 def iniciar_supabase() -> Client:
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
+    url = str(st.secrets["SUPABASE_URL"]).strip()
+    key = str(st.secrets["SUPABASE_KEY"]).strip()
     return create_client(url, key)
 
 @st.cache_resource
 def iniciar_gemini() -> genai.Client:
-    api_key_limpia = str(st.secrets["GEMINI_API_KEY"]).strip()
-    return genai.Client(api_key=api_key_limpia)
+    api_key = str(st.secrets["GEMINI_API_KEY"]).strip()
+    return genai.Client(api_key=api_key)
 
 supabase = iniciar_supabase()
 gemini_client = iniciar_gemini()
-TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
+TELEGRAM_TOKEN = str(st.secrets["TELEGRAM_TOKEN"]).strip()
 
 # ==========================================
 # 2. ESQUEMA DE DATOS PARA LA IA (PYDANTIC)
@@ -36,9 +36,9 @@ TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
 class ProductoExtraido(BaseModel):
     categoria_tabla: Literal["plato_preparado", "ingrediente"] = Field(
         description=(
-            "Clasifica en 'plato_preparado' si es comida ya cocinada lista para descongelar y comer "
+            "Clasifica en 'plato_preparado' si es comida cocinada lista para descongelar y comer "
             "(ej. filetes de pollo en salsa, lentejas, lasaña). "
-            "Clasifica en 'ingrediente' si es materia prima para cocinar o acompañamiento base "
+            "Clasifica en 'ingrediente' si es materia prima para cocinar o base "
             "(ej. cebolla picada, pechuga cruda, gambas crudas, verduras troceadas)."
         )
     )
@@ -72,17 +72,16 @@ class ResultadoAnalisisIA(BaseModel):
 def obtener_actualizaciones_telegram():
     """Consulta mensajes y notas de voz pendientes en Telegram."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-    # timeout corto y aseguramos la recepción de cualquier tipo de mensaje
     params = {"allowed_updates": ["message"]}
     resp = requests.get(url, params=params, timeout=10).json()
     if resp.get("ok"):
         return resp.get("result", [])
     return []
 
-def confirmar_offset_telegram(ultimo_update_id: int):
-    """Limpia la cola de Telegram para no volver a procesar mensajes antiguos."""
+def confirmar_offset_telegram(update_id: int):
+    """Marca como recibido un update específico en los servidores de Telegram."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-    requests.get(url, params={"offset": ultimo_update_id + 1}, timeout=10)
+    requests.get(url, params={"offset": update_id + 1}, timeout=10)
 
 def borrar_mensaje_telegram(chat_id: int, message_id: int):
     """Elimina la nota original del chat tras procesarla con éxito."""
@@ -90,12 +89,12 @@ def borrar_mensaje_telegram(chat_id: int, message_id: int):
     requests.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=10)
 
 def enviar_respuesta_telegram(chat_id: int, texto: str):
-    """Envía al usuario una confirmación o un aviso de error por Telegram."""
+    """Envía confirmación o aviso de error por Telegram."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, json={"chat_id": chat_id, "text": texto}, timeout=10)
 
 def descargar_audio_telegram(file_id: str) -> bytes:
-    """Descarga los bytes de la nota de voz desde los servidores de Telegram."""
+    """Descarga los bytes de la nota de voz desde Telegram."""
     url_info = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
     info = requests.get(url_info, params={"file_id": file_id}, timeout=10).json()
     file_path = info["result"]["file_path"]
@@ -103,15 +102,15 @@ def descargar_audio_telegram(file_id: str) -> bytes:
     return requests.get(url_descarga, timeout=15).content
 
 def analizar_con_gemini(audio_bytes: bytes = None, texto: str = None) -> ResultadoAnalisisIA:
-    """Envía el audio o texto a Gemini 2.5 Flash y devuelve la estructura validada."""
+    """Envía el audio o texto a Gemini 2.5 Flash con respuesta estructurada."""
     instrucciones = (
         "Eres el asistente de inventario de un congelador doméstico. "
         "Analiza la entrada del usuario y extrae todos los productos mencionados. "
-        "Distingue rigurosamente entre platos ya cocinados ('plato_preparado') y "
+        "Distingue rigurosamente entre platos cocinados ('plato_preparado') y "
         "materia prima sin cocinar o base ('ingrediente'). "
         "Clasifica cada uno en Carne, Pescado, Verdura u Otros. "
-        "Si el audio es ininteligible, puro ruido o no habla de comida/congelador, "
-        "marca 'entendido' como False y redacta un aviso amable en 'mensaje_error'."
+        "Si el audio es ininteligible, ruido o no habla de comida/congelador, "
+        "marca 'entendido' como False y redacta un motivo breve en 'mensaje_error'."
     )
 
     contenidos = [instrucciones]
@@ -187,8 +186,8 @@ tab_actualizacion, tab_inventario = st.tabs([
 with tab_actualizacion:
     st.subheader("Sincronización de Notas de Voz y Mensajes")
     st.write(
-        "Envía una nota de voz a tu bot de Telegram diciendo lo que guardas en el congelador "
-        "y pulsa el botón inferior para que la IA lo clasifique, actualice el stock y limpie la nota."
+        "Envía una nota de voz o mensaje a tu bot de Telegram indicando qué guardas en el congelador "
+        "y pulsa el botón para procesarlo con IA."
     )
 
     if st.button("🚀 Buscar y procesar nuevas notas de Telegram", type="primary"):
@@ -198,11 +197,10 @@ with tab_actualizacion:
             if not updates:
                 st.info("No hay notas de voz ni mensajes nuevos pendientes en Telegram.")
             else:
-                ultimo_id = 0
                 procesados_ok = 0
                 errores_ia = 0
 
-for u in updates:
+                for u in updates:
                     update_id = u["update_id"]
                     mensaje = u.get("message")
                     if not mensaje:
@@ -214,6 +212,7 @@ for u in updates:
                     voz = mensaje.get("voice")
                     texto = mensaje.get("text")
 
+                    # Ignorar comando inicial /start
                     if texto and texto.strip().startswith("/start"):
                         confirmar_offset_telegram(update_id)
                         continue
@@ -228,6 +227,7 @@ for u in updates:
                             confirmar_offset_telegram(update_id)
                             continue
 
+                        # Validación del resultado de Gemini
                         if not resultado.entendido or not resultado.productos:
                             motivo = resultado.mensaje_error or "No pude distinguir los productos ni las cantidades."
                             aviso_telegram = (
@@ -252,17 +252,13 @@ for u in updates:
                             procesados_ok += 1
                             st.success(texto_confirmacion)
 
-                        # Confirmamos este update específico para que no se pierdan los siguientes si uno falla
+                        # Confirmar este update para vaciarlo de Telegram
                         confirmar_offset_telegram(update_id)
 
                     except Exception as e:
                         st.error(f"Error procesando un mensaje: {e}")
 
-                # Confirmar lectura a Telegram para vaciar la cola de pendientes
-                if ultimo_id > 0:
-                    confirmar_offset_telegram(ultimo_id)
-
-                st.toast(f"Proceso finalizado: {procesados_ok} procesados, {errores_ia} avisos enviados.")
+                st.toast(f"Finalizado: {procesados_ok} procesados, {errores_ia} avisos enviados.")
 
 # ------------------------------------------
 # PESTAÑA 2: INVENTARIO Y CONSUMO
@@ -270,7 +266,6 @@ for u in updates:
 with tab_inventario:
     st.subheader("Control de Stock del Congelador")
 
-    # Filtro superior por tipo de alimento
     filtro_tipo = st.radio(
         "Filtrar por familia de alimento:",
         options=["Todos", "Carne", "Pescado", "Verdura", "Otros"],
@@ -310,7 +305,7 @@ with tab_inventario:
     # --- TABLA 2: INGREDIENTES ---
     with col_ingredientes:
         st.markdown("### 🥕 Ingredientes")
-        st.caption("Materia prima guardada por tipo de tupper o bolsa.")
+        st.caption("Materia prima guardada por tipo de envase.")
 
         query_ing = supabase.table("ingredientes").select("*").order("nombre")
         if filtro_tipo != "Todos":
