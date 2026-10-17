@@ -70,9 +70,11 @@ class ResultadoAnalisisIA(BaseModel):
 # 3. FUNCIONES DE TELEGRAM Y GEMINI
 # ==========================================
 def obtener_actualizaciones_telegram():
-    """Consulta los mensajes y notas de voz pendientes en Telegram."""
+    """Consulta mensajes y notas de voz pendientes en Telegram."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-    resp = requests.get(url, timeout=10).json()
+    # timeout corto y aseguramos la recepción de cualquier tipo de mensaje
+    params = {"allowed_updates": ["message"]}
+    resp = requests.get(url, params=params, timeout=10).json()
     if resp.get("ok"):
         return resp.get("result", [])
     return []
@@ -200,10 +202,11 @@ with tab_actualizacion:
                 procesados_ok = 0
                 errores_ia = 0
 
-                for u in updates:
-                    ultimo_id = max(ultimo_id, u["update_id"])
+for u in updates:
+                    update_id = u["update_id"]
                     mensaje = u.get("message")
                     if not mensaje:
+                        confirmar_offset_telegram(update_id)
                         continue
 
                     chat_id = mensaje["chat"]["id"]
@@ -211,8 +214,8 @@ with tab_actualizacion:
                     voz = mensaje.get("voice")
                     texto = mensaje.get("text")
 
-                    # Ignorar el comando inicial /start
                     if texto and texto.strip().startswith("/start"):
+                        confirmar_offset_telegram(update_id)
                         continue
 
                     try:
@@ -222,17 +225,17 @@ with tab_actualizacion:
                         elif texto:
                             resultado = analizar_con_gemini(texto=texto)
                         else:
+                            confirmar_offset_telegram(update_id)
                             continue
 
-                        # Verificar si la IA entendió la nota de voz
                         if not resultado.entendido or not resultado.productos:
                             motivo = resultado.mensaje_error or "No pude distinguir los productos ni las cantidades."
                             aviso_telegram = (
-                                f"⚠️ Aviso: No he podido entender bien la nota de voz ({motivo}). "
+                                f"⚠️ Aviso: No he podido entender bien la nota ({motivo}). "
                                 "Por favor, vuelve a enviarla indicando el producto, envase y cantidad."
                             )
                             enviar_respuesta_telegram(chat_id, aviso_telegram)
-                            st.warning(f"Nota no comprendida. Se ha enviado un aviso a tu Telegram: {motivo}")
+                            st.warning(f"Nota no comprendida: {motivo}")
                             errores_ia += 1
                         else:
                             resumen_lineas = []
@@ -243,13 +246,14 @@ with tab_actualizacion:
                                     f"• {etiq}: {prod.nombre} | {prod.envase} | x{prod.cantidad} ({prod.tipo_alimento})"
                                 )
 
-                            # Confirmar en Telegram y borrar la nota original procesada
                             texto_confirmacion = "✅ Añadido al congelador:\n" + "\n".join(resumen_lineas)
                             enviar_respuesta_telegram(chat_id, texto_confirmacion)
                             borrar_mensaje_telegram(chat_id, message_id)
                             procesados_ok += 1
-
                             st.success(texto_confirmacion)
+
+                        # Confirmamos este update específico para que no se pierdan los siguientes si uno falla
+                        confirmar_offset_telegram(update_id)
 
                     except Exception as e:
                         st.error(f"Error procesando un mensaje: {e}")
