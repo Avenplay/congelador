@@ -1,5 +1,5 @@
-streamlit>=1.42.0
-supabase>=2.13.0
-google-genai>=1.5.0
-pydantic>=2.10.0
-requests>=2.32.0
+streamlit
+pandas
+Pillow
+google-genai
+psycopg2-binary
