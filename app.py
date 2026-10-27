@@ -102,7 +102,7 @@ def descargar_audio_telegram(file_id: str) -> bytes:
     return requests.get(url_descarga, timeout=15).content
 
 def analizar_con_gemini(audio_bytes: bytes = None, texto: str = None) -> ResultadoAnalisisIA:
-    """Envía el audio o texto a Gemini 2.5 Flash con respuesta estructurada."""
+    """Envía el audio o texto a Gemini con reintento automático en caso de límite de cuota (429)."""
     instrucciones = (
         "Eres el asistente de inventario de un congelador doméstico. "
         "Analiza la entrada del usuario y extrae todos los productos mencionados. "
@@ -121,17 +121,30 @@ def analizar_con_gemini(audio_bytes: bytes = None, texto: str = None) -> Resulta
     elif texto:
         contenidos.append(f"Mensaje del usuario: {texto}")
 
-    respuesta = gemini_client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=contenidos,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=ResultadoAnalisisIA,
-            temperature=0.1
-        )
-    )
-    return ResultadoAnalisisIA.model_validate_json(respuesta.text)
+    # Lista de modelos por orden de preferencia con mayor cuota gratuita
+    modelos = ["gemini-2.0-flash", "gemini-1.5-flash"]
 
+    ultimo_error = None
+    for mod in modelos:
+        try:
+            respuesta = gemini_client.models.generate_content(
+                model=mod,
+                contents=contenidos,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=ResultadoAnalisisIA,
+                    temperature=0.1
+                )
+            )
+            return ResultadoAnalisisIA.model_validate_json(respuesta.text)
+        except Exception as e:
+            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                ultimo_error = e
+                continue # Prueba con el siguiente modelo si la cuota de este se agotó
+            raise e
+
+    # Si todos los modelos superaron cuota diaria:
+    raise Exception(f"Límite de cuota diaria alcanzado en todos los modelos gratuitos: {ultimo_error}")
 # ==========================================
 # 4. FUNCIONES DE BASE DE DATOS (SUPABASE)
 # ==========================================
