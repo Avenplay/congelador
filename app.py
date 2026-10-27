@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import time
 from supabase import create_client, Client
 from google import genai
 from google.genai import types
@@ -102,7 +103,7 @@ def descargar_audio_telegram(file_id: str) -> bytes:
     return requests.get(url_descarga, timeout=15).content
 
 def analizar_con_gemini(audio_bytes: bytes = None, texto: str = None) -> ResultadoAnalisisIA:
-    """Envía el audio o texto a Gemini 3.8 Flash con respuesta estructurada."""
+    """Envía el audio o texto a Gemini con reintentos automáticos si hay alta demanda (503)."""
     instrucciones = (
         "Eres el asistente de inventario de un congelador doméstico. "
         "Analiza la entrada del usuario y extrae todos los productos mencionados. "
@@ -121,17 +122,27 @@ def analizar_con_gemini(audio_bytes: bytes = None, texto: str = None) -> Resulta
     elif texto:
         contenidos.append(f"Mensaje del usuario: {texto}")
 
-    # Modelo actualizado recomendado por la API de Google
-    respuesta = gemini_client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=contenidos,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=ResultadoAnalisisIA,
-            temperature=0.1
-        )
-    )
-    return ResultadoAnalisisIA.model_validate_json(respuesta.text)
+    # Intentar hasta 3 veces si los servidores de Google dan error 503 de alta demanda
+    intentos = 3
+    for intento in range(intentos):
+        try:
+            respuesta = gemini_client.models.generate_content(
+                model="gemini-3.8-flash",
+                contents=contenidos,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=ResultadoAnalisisIA,
+                    temperature=0.1
+                )
+            )
+            return ResultadoAnalisisIA.model_validate_json(respuesta.text)
+        except Exception as e:
+            error_str = str(e)
+            # Si es un error de alta demanda (503 o UNAVAILABLE) y quedan intentos
+            if ("503" in error_str or "UNAVAILABLE" in error_str) and intento < intentos - 1:
+                time.sleep(3)  # Espera 3 segundos antes de volver a probar
+                continue
+            raise e
 # ==========================================
 # 4. FUNCIONES DE BASE DE DATOS (SUPABASE)
 # ==========================================
